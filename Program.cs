@@ -1,65 +1,79 @@
+using DotNetEnv;
 using JoraScraper.Modules.Scraper.Interface;
 using JoraScraper.Modules.Scraper.Service;
-using Microsoft.OpenApi.Models;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.DependencyInjection;
+
+Env.Load();
+
+// --- GITHUB ACTIONS RUNNER LOGIC ---
+// This block runs BEFORE builder.Build() to handle CLI commands
+if (args.Contains("--run-scraper"))
+{
+    var tempBuilder = WebApplication.CreateBuilder(args);
+    
+    // Register necessary services for the scraper to function
+    tempBuilder.Services.AddLogging();
+    tempBuilder.Services.AddScoped<IScraperService, ScraperService>();
+    
+    var tempApp = tempBuilder.Build();
+    
+    using var scope = tempApp.Services.CreateScope();
+    var scraper = scope.ServiceProvider.GetRequiredService<IScraperService>();
+    
+    Console.WriteLine("🚀 GitHub Action detected: Starting Jora Scraper...");
+    await scraper.ScrapeAndSaveJobsAsync();
+    Console.WriteLine("✅ Scrape process finished.");
+    return; // Exit application immediately after scraping
+}
+// -----------------------------------
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Add Services to the container
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
+// EPPlus License
+OfficeOpenXml.ExcelPackage.License.SetNonCommercialPersonal("Your Name");
+
+builder.Services.AddCors(options =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Jora Scraper API", Version = "v1" });
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        policy.WithOrigins(
+                "https://www.dsailorgroup.com.au",
+                "https://dsailor-vercel.vercel.app",
+                "https://dsailorgroup.comm.au",
+                "https://localhost:5193"
+            )
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials();
+    });
 });
 
-// 2. Register Scraper Dependencies
-builder.Services.AddHttpClient(); // Required for UploadFileToApiAsync
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
+
+builder.Services.AddControllersWithViews();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Scraper service
 builder.Services.AddScoped<IScraperService, ScraperService>();
 
-// --- SCRAPER CLI RUNNER LOGIC ---
-// This block detects the --run-scraper flag from GitHub Actions
-if (args.Contains("--run-scraper"))
-{
-    builder.Logging.ClearProviders();
-    builder.Logging.AddConsole();
-
-    var appForCli = builder.Build();
-    using var scope = appForCli.Services.CreateScope();
-    var scraper = scope.ServiceProvider.GetRequiredService<IScraperService>();
-
-    Console.WriteLine("------------------------------------------");
-    Console.WriteLine("🚀 Starting Scraper via CLI Execution...");
-    Console.WriteLine("------------------------------------------");
-
-    try
-    {
-        await scraper.ScrapeAndSaveJobsAsync();
-        Console.WriteLine("✅ Scraper finished successfully.");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"❌ Critical error during execution: {ex.Message}");
-        Environment.Exit(1); // Exit with error code for GitHub Actions
-    }
-
-    return; // Stop here so the web server doesn't start
-}
-// --------------------------------
+// Background service (Keep this for Render/Local, but GitHub bypasses it)
+builder.Services.AddHostedService<JobScraperBackgroundService>();
 
 var app = builder.Build();
 
-// 3. Configure the HTTP request pipeline (Web Server Mode)
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
-
-// Allow your frontend to access the API if needed
-app.UseCors(policy => policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
-
+app.UseCors("AllowFrontend");
 app.UseAuthorization();
 app.MapControllers();
 
