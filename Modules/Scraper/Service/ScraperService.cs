@@ -3,16 +3,19 @@ using JoraScraper.Modules.Scraper.Interface;
 using System.Text.RegularExpressions;
 using OfficeOpenXml;
 using PuppeteerSharp;
+using System.Net.Http.Headers;
 
 namespace JoraScraper.Modules.Scraper.Service
 {
     public class ScraperService : IScraperService
     {
         private readonly ILogger<ScraperService> _logger;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public ScraperService(ILogger<ScraperService> logger)
+        public ScraperService(ILogger<ScraperService> logger, IHttpClientFactory httpClientFactory)
         {
             _logger = logger;
+            _httpClientFactory = httpClientFactory;
         }
 
         public async Task ScrapeAndSaveJobsAsync()
@@ -266,6 +269,57 @@ namespace JoraScraper.Modules.Scraper.Service
                 worksheet.Cells.AutoFitColumns();
 
                 await package.SaveAsAsync(new FileInfo(filePath));
+                await SendFileToApiAsync(filePath);
+            }
+        }
+
+        public async Task<bool> SendFileToApiAsync(string filePath)
+        {
+            string targetUrl = "https://api.dsailorgroup.com.au/api/job-files/upload";
+            if (!File.Exists(filePath))
+            {
+                _logger.LogError("Upload failed: File not found at {path}", filePath);
+                return false;
+            }
+
+            try
+            {
+                
+                // Use IHttpClientFactory if available, otherwise 'new HttpClient()'
+                using var client = _httpClientFactory.CreateClient();
+
+                // Prepare the form data
+                using var content = new MultipartFormDataContent();
+
+                // Open the file stream - 'using' ensures the file is unlocked after the request
+                await using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+                var fileContent = new StreamContent(fileStream);
+
+                // Define the content type for Excel OpenXML
+                fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+                // "file" is the form-data key name. 
+                // Most APIs expect "file", "data", or "attachment".
+                content.Add(fileContent, "file", Path.GetFileName(filePath));
+
+                _logger.LogInformation("Uploading {fileName} to {url}...", Path.GetFileName(filePath), targetUrl);
+
+                var response = await client.PostAsync(targetUrl, content);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("Upload successful! Status: {code}", response.StatusCode);
+                    return true;
+                }
+
+                var errorMessage = await response.Content.ReadAsStringAsync();
+                _logger.LogError("Upload failed. API returned: {status} - {message}", response.StatusCode, errorMessage);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception occurred during file upload to {url}", targetUrl);
+                return false;
             }
         }
     }

@@ -32,7 +32,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // EPPlus License
 OfficeOpenXml.ExcelPackage.License.SetNonCommercialPersonal("Your Name");
-
+builder.Services.AddHttpClient();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
