@@ -12,8 +12,12 @@ if (args.Contains("--run-scraper"))
 {
     var tempBuilder = WebApplication.CreateBuilder(args);
     
-    // Register necessary services for the scraper to function
     tempBuilder.Services.AddLogging();
+    
+    // --- MISSING LINE BELOW ---
+    tempBuilder.Services.AddHttpClient(); 
+    // ---------------------------
+
     tempBuilder.Services.AddScoped<IScraperService, ScraperService>();
     
     var tempApp = tempBuilder.Build();
@@ -24,7 +28,7 @@ if (args.Contains("--run-scraper"))
     Console.WriteLine("🚀 GitHub Action detected: Starting Jora Scraper...");
     await scraper.ScrapeAndSaveJobsAsync();
     Console.WriteLine("✅ Scrape process finished.");
-    return; // Exit application immediately after scraping
+    return; 
 }
 // -----------------------------------
 
