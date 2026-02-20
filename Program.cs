@@ -3,17 +3,23 @@ using JoraScraper.Modules.Scraper.Interface;
 using JoraScraper.Modules.Scraper.Service;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
+using OfficeOpenXml;
 
 Env.Load();
 
 // --- GITHUB ACTIONS RUNNER LOGIC ---
-// This block runs BEFORE builder.Build() to handle CLI commands
+// This handles the CLI command 'dotnet run -- --run-scraper'
 if (args.Contains("--run-scraper"))
 {
     var tempBuilder = WebApplication.CreateBuilder(args);
     
-    // Register necessary services for the scraper to function
-    tempBuilder.Services.AddLogging();
+    // FIX: Register HttpClient and Logging for the ScraperService
+    tempBuilder.Services.AddHttpClient(); 
+    tempBuilder.Services.AddLogging(logging => {
+        logging.AddConsole();
+        logging.SetMinimumLevel(LogLevel.Information);
+    });
+    
     tempBuilder.Services.AddScoped<IScraperService, ScraperService>();
     
     var tempApp = tempBuilder.Build();
@@ -21,17 +27,28 @@ if (args.Contains("--run-scraper"))
     using var scope = tempApp.Services.CreateScope();
     var scraper = scope.ServiceProvider.GetRequiredService<IScraperService>();
     
-    Console.WriteLine("🚀 GitHub Action detected: Starting Jora Scraper...");
-    await scraper.ScrapeAndSaveJobsAsync();
-    Console.WriteLine("✅ Scrape process finished.");
-    return; // Exit application immediately after scraping
+    Console.WriteLine("GitHub Action detected: Starting Jora Scraper...");
+    try 
+    {
+        await scraper.ScrapeAndSaveJobsAsync();
+        Console.WriteLine("Scrape process finished successfully.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Critical Error during CLI scrape: {ex.Message}");
+        Environment.Exit(1); // Tell GitHub Actions the job failed
+    }
+    return; // Exit application immediately
 }
 // -----------------------------------
 
 var builder = WebApplication.CreateBuilder(args);
 
-// EPPlus License
-OfficeOpenXml.ExcelPackage.License.SetNonCommercialPersonal("Your Name");
+// EPPlus License - Global Setting
+ExcelPackage.License.SetNonCommercialPersonal("Your Name");
+
+// Add HttpClient for the ScraperService and the BackgroundService
+builder.Services.AddHttpClient();
 
 builder.Services.AddCors(options =>
 {
@@ -62,7 +79,7 @@ builder.Services.AddSwaggerGen();
 // Scraper service
 builder.Services.AddScoped<IScraperService, ScraperService>();
 
-// Background service (Keep this for Render/Local, but GitHub bypasses it)
+// Background service (Runs only when the Web Server is running)
 builder.Services.AddHostedService<JobScraperBackgroundService>();
 
 var app = builder.Build();

@@ -3,16 +3,19 @@ using JoraScraper.Modules.Scraper.Interface;
 using System.Text.RegularExpressions;
 using OfficeOpenXml;
 using PuppeteerSharp;
+using System.Net.Http.Headers;
 
 namespace JoraScraper.Modules.Scraper.Service
 {
     public class ScraperService : IScraperService
     {
         private readonly ILogger<ScraperService> _logger;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public ScraperService(ILogger<ScraperService> logger)
+        public ScraperService(ILogger<ScraperService> logger, IHttpClientFactory httpClientFactory)
         {
             _logger = logger;
+            _httpClientFactory = httpClientFactory;
         }
 
         public async Task ScrapeAndSaveJobsAsync()
@@ -23,6 +26,7 @@ namespace JoraScraper.Modules.Scraper.Service
             try
             {
                 _logger.LogInformation("Starting browser setup...");
+                _logger.LogInformation("Preparing for sending to himalayan...");
 
                 var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
                 LaunchOptions launchOptions;
@@ -249,6 +253,51 @@ namespace JoraScraper.Modules.Scraper.Service
             await package.SaveAsAsync(new FileInfo(filePath));
 
             _logger.LogInformation("✅ Excel saved to: {filePath}", filePath);
+        }
+
+        private async Task UploadFileToApiAsync(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                _logger.LogError("Upload failed: File not found at {path}", filePath);
+                return;
+            }
+
+            try
+            {
+                _logger.LogInformation("Uploading {path} to API...", filePath);
+
+                using var client = _httpClientFactory.CreateClient();
+                using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.dsailorgroup.com.au/api/job-files/upload");
+
+                // Create the content
+                using var content = new MultipartFormDataContent();
+                var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+                var streamContent = new StreamContent(fileStream);
+                
+                // Set the media type for Excel
+                streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+                // "file" is the parameter name the API expects
+                content.Add(streamContent, "file", Path.GetFileName(filePath));
+                request.Content = content;
+
+                var response = await client.SendAsync(request);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("File successfully uploaded to API!");
+                }
+                else
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    _logger.LogError("API Upload failed with status {code}: {error}", response.StatusCode, error);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception occurred during file upload.");
+            }
         }
 
         private class DescriptionData { public string Text { get; set; } = ""; public string Html { get; set; } = ""; }
