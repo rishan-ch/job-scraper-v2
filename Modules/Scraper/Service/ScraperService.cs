@@ -26,7 +26,6 @@ namespace JoraScraper.Modules.Scraper.Service
             try
             {
                 _logger.LogInformation("Starting browser setup...");
-                _logger.LogInformation("Preparing for sending to himalayan...");
 
                 var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
                 LaunchOptions launchOptions;
@@ -38,7 +37,6 @@ namespace JoraScraper.Modules.Scraper.Service
                     {
                         Headless = true,
                         ExecutablePath = executablePath,
-                        // STEALTH FIX: Added AutomationControlled bypass
                         Args = new[] { 
                             "--no-sandbox", 
                             "--disable-setuid-sandbox", 
@@ -63,7 +61,6 @@ namespace JoraScraper.Modules.Scraper.Service
                 await using var page = await browser.NewPageAsync();
 
                 await page.SetViewportAsync(new ViewPortOptions { Width = 1920, Height = 1080 });
-                // Updated User Agent to a more modern version
                 await page.SetUserAgentAsync("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
                 int pageNum = 1;
@@ -74,7 +71,6 @@ namespace JoraScraper.Modules.Scraper.Service
 
                 await page.GoToAsync(firstUrl, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded }, Timeout = 30000 });
 
-                // DEBUG: Take a screenshot immediately after navigation to see what GitHub sees
                 var exportDir = Path.Combine(Directory.GetCurrentDirectory(), "DataExports");
                 if (!Directory.Exists(exportDir)) Directory.CreateDirectory(exportDir);
                 await page.ScreenshotAsync(Path.Combine(exportDir, "debug_screen.png"));
@@ -92,38 +88,21 @@ namespace JoraScraper.Modules.Scraper.Service
 
                 while (pageNum <= totalPages)
                 {
-                    string url = pageNum == 1
-                        ? firstUrl
-                        : $"https://au.jora.com/j?sp=homepage&trigger_source=homepage&q=&l=&p={pageNum}";
-
+                    string url = pageNum == 1 ? firstUrl : $"https://au.jora.com/j?sp=homepage&trigger_source=homepage&q=&l=&p={pageNum}";
                     _logger.LogInformation("Processing page {pageNum}/{totalPages}: {url}", pageNum, totalPages, url);
 
                     if (pageNum > 1)
                     {
-                        await page.GoToAsync(url, new NavigationOptions
-                        {
-                            WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded },
-                            Timeout = 30000
-                        });
+                        await page.GoToAsync(url, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded }, Timeout = 30000 });
                     }
 
-                    try
-                    {
-                        await page.WaitForSelectorAsync(".job-card.result", new WaitForSelectorOptions { Timeout = 10000 });
-                    }
-                    catch
-                    {
-                        _logger.LogWarning("No jobs found at page {pageNum}. Stopping.", pageNum);
-                        break;
-                    }
+                    try { await page.WaitForSelectorAsync(".job-card.result", new WaitForSelectorOptions { Timeout = 10000 }); }
+                    catch { _logger.LogWarning("No jobs found at page {pageNum}. Stopping.", pageNum); break; }
 
                     await Task.Delay(2000);
-
                     int jobCount = await page.EvaluateFunctionAsync<int>("() => document.querySelectorAll('.job-card.result').length");
-                    _logger.LogInformation("Found {jobCount} jobs on page {pageNum}", jobCount, pageNum);
 
                     if (jobCount == 0) break;
-
                     int newJobsOnPage = 0;
 
                     for (int i = 0; i < jobCount; i++)
@@ -134,7 +113,6 @@ namespace JoraScraper.Modules.Scraper.Service
                                 const cards = Array.from(document.querySelectorAll('.job-card.result'));
                                 const card = cards[index];
                                 if (!card) return null;
-                                
                                 const titleLink = card.querySelector('.job-title a.job-link');
                                 const company = card.querySelector('.job-company');
                                 const location = card.querySelector('.job-location');
@@ -142,7 +120,6 @@ namespace JoraScraper.Modules.Scraper.Service
                                 const salary = badges.find(b => b.textContent.includes('$') || b.textContent.includes('hour') || b.textContent.includes('year'));
                                 const posted = card.querySelector('.job-listed-date');
                                 const jobAbstract = card.querySelector('.job-abstract');
-                                
                                 return {{
                                     title: titleLink ? titleLink.textContent.trim() : '',
                                     company: company ? company.textContent.trim() : '',
@@ -158,25 +135,18 @@ namespace JoraScraper.Modules.Scraper.Service
 
                             if (jobInfo == null || string.IsNullOrEmpty(jobInfo.Title)) continue;
                             if (processedUrls.Contains(jobInfo.Url)) continue;
-
                             processedUrls.Add(jobInfo.Url);
 
-                            // Extract description
                             try
                             {
                                 var clickSelector = $".job-card.result:nth-of-type({i + 1}) a.job-link.show-job-description";
                                 await page.ClickAsync(clickSelector);
                                 await page.WaitForSelectorAsync(".jdv-panel .job-description-container", new WaitForSelectorOptions { Timeout = 5000 });
                                 await Task.Delay(1000);
-
-                                var descData = await page.EvaluateFunctionAsync<DescriptionData>(@"() => {
+                                var descData = await page.EvaluateFunctionAsync<DescriptionData>(@"() => {{
                                     const descContainer = document.querySelector('.jdv-panel .job-description-container');
-                                    return {
-                                        text: descContainer ? descContainer.innerText.trim() : '',
-                                        html: descContainer ? descContainer.innerHTML.trim() : ''
-                                    };
-                                }");
-
+                                    return {{ text: descContainer ? descContainer.innerText.trim() : '', html: descContainer ? descContainer.innerHTML.trim() : '' }};
+                                }}");
                                 jobInfo.Description = CleanText(descData.Text);
                                 jobInfo.DescriptionHtml = descData.Html;
                             }
@@ -187,120 +157,93 @@ namespace JoraScraper.Modules.Scraper.Service
                         }
                         catch (Exception ex) { _logger.LogError(ex, "Error on job {index}", i); }
                     }
-
                     if (newJobsOnPage == 0) break;
                     pageNum++;
                 }
 
-                _logger.LogInformation("Scraping complete. Total jobs collected: {count}", jobs.Count);
+                _logger.LogInformation("Scraping complete. Total jobs: {count}", jobs.Count);
+                
+                // 1. Save locally
                 await SaveJobsToExcel(jobs);
+
+                // 2. Upload to your backend
+                var finalFilePath = Path.Combine(exportDir, "JobsFromJora.xlsx");
+                await UploadFileToApiAsync(finalFilePath);
             }
             catch (Exception ex) { _logger.LogError(ex, "Error during scraping process."); }
         }
 
-        private async Task<int> GetTotalPages(IPage page)
+        private async Task UploadFileToApiAsync(string filePath)
         {
+            if (!File.Exists(filePath)) return;
             try
             {
+                _logger.LogInformation("🚀 Uploading Excel file to backend...");
+                using var client = _httpClientFactory.CreateClient();
+                
+                // CHANGE THIS URL TO YOUR ACTUAL PRODUCTION DOMAIN
+                var uploadUrl = "https://your-production-api.com/api/job-files/upload";
+
+                using var request = new HttpRequestMessage(HttpMethod.Post, uploadUrl);
+                using var content = new MultipartFormDataContent();
+                
+                var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+                var streamContent = new StreamContent(fileStream);
+                streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+                content.Add(streamContent, "file", Path.GetFileName(filePath));
+                request.Content = content;
+
+                var response = await client.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                    _logger.LogInformation("✅ File successfully pushed to API.");
+                else
+                    _logger.LogError("❌ API Upload failed: {code}", response.StatusCode);
+            }
+            catch (Exception ex) { _logger.LogError(ex, "Upload Exception."); }
+        }
+
+        public async Task SaveJobsToExcel(List<JobInfo> jobs, string fileName = "JobsFromJora.xlsx")
+        {
+            ExcelPackage.License.SetNonCommercialPersonal("Your Name");
+            var exportDir = Path.Combine(Directory.GetCurrentDirectory(), "DataExports");
+            if (!Directory.Exists(exportDir)) Directory.CreateDirectory(exportDir);
+            var filePath = Path.Combine(exportDir, fileName);
+
+            using var package = new ExcelPackage();
+            var ws = package.Workbook.Worksheets.Add("Jobs");
+            string[] headers = { "JobPostId", "Title", "Company", "Location", "Salary", "Posted Date", "URL", "Description" };
+            for (int i = 0; i < headers.Length; i++) ws.Cells[1, i + 1].Value = headers[i];
+
+            for (int i = 0; i < jobs.Count; i++)
+            {
+                var job = jobs[i];
+                ws.Cells[i + 2, 1].Value = job.JobPostId;
+                ws.Cells[i + 2, 2].Value = job.Title;
+                ws.Cells[i + 2, 3].Value = job.Company;
+                ws.Cells[i + 2, 4].Value = job.Location;
+                ws.Cells[i + 2, 5].Value = job.Salary;
+                ws.Cells[i + 2, 6].Value = job.PostedDate;
+                ws.Cells[i + 2, 7].Value = job.Url;
+                ws.Cells[i + 2, 8].Value = job.DescriptionHtml;
+            }
+            ws.Cells.AutoFitColumns();
+            await package.SaveAsAsync(new FileInfo(filePath));
+        }
+
+        private async Task<int> GetTotalPages(IPage page)
+        {
+            try {
                 return await page.EvaluateFunctionAsync<int>(@"() => {
                     const indicator = document.querySelector('.search-results-page-number');
                     if (!indicator) return 1;
                     const match = indicator.textContent.match(/of\s+(\d+)/i);
                     return match ? parseInt(match[1]) : 1;
                 }");
-            }
-            catch { return 1; }
+            } catch { return 1; }
         }
 
-        private string CleanText(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return text;
-            return Regex.Replace(text, @"[ \t]+", " ").Trim();
-        }
-
-        public async Task SaveJobsToExcel(List<JobInfo> jobs, string fileName = "JobsFromJora.xlsx")
-        {
-            // EPPLUS 8 FIX: Use static License property
-            ExcelPackage.License.SetNonCommercialPersonal("Your Name");
-
-            var exportDir = Path.Combine(Directory.GetCurrentDirectory(), "DataExports");
-            if (!Directory.Exists(exportDir)) Directory.CreateDirectory(exportDir);
-
-            var filePath = Path.Combine(exportDir, fileName);
-            if (File.Exists(filePath)) File.Delete(filePath);
-
-            using var package = new ExcelPackage();
-            var worksheet = package.Workbook.Worksheets.Add("Jobs");
-
-            // Headers
-            string[] headers = { "JobPostId", "Title", "Company", "Location", "Salary", "Posted Date", "URL", "Description" };
-            for (int i = 0; i < headers.Length; i++) worksheet.Cells[1, i + 1].Value = headers[i];
-
-            for (int i = 0; i < jobs.Count; i++)
-            {
-                var job = jobs[i];
-                worksheet.Cells[i + 2, 1].Value = job.JobPostId;
-                worksheet.Cells[i + 2, 2].Value = job.Title;
-                worksheet.Cells[i + 2, 3].Value = job.Company;
-                worksheet.Cells[i + 2, 4].Value = job.Location;
-                worksheet.Cells[i + 2, 5].Value = job.Salary;
-                worksheet.Cells[i + 2, 6].Value = job.PostedDate;
-                worksheet.Cells[i + 2, 7].Value = job.Url;
-                worksheet.Cells[i + 2, 8].Value = job.DescriptionHtml;
-            }
-
-            worksheet.Cells.AutoFitColumns();
-            _logger.LogInformation("sending the file to himalayan");
-            await UploadFileToApiAsync(filePath);
-            await package.SaveAsAsync(new FileInfo(filePath));
-
-            _logger.LogInformation("✅ Excel saved to: {filePath}", filePath);
-        }
-
-        private async Task UploadFileToApiAsync(string filePath)
-        {
-            if (!File.Exists(filePath))
-            {
-                _logger.LogError("Upload failed: File not found at {path}", filePath);
-                return;
-            }
-
-            try
-            {
-                _logger.LogInformation("Uploading {path} to API...", filePath);
-
-                using var client = _httpClientFactory.CreateClient();
-                using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.dsailorgroup.com.au/api/job-files/upload");
-
-                // Create the content
-                using var content = new MultipartFormDataContent();
-                var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-                var streamContent = new StreamContent(fileStream);
-                
-                // Set the media type for Excel
-                streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-
-                // "file" is the parameter name the API expects
-                content.Add(streamContent, "file", Path.GetFileName(filePath));
-                request.Content = content;
-
-                var response = await client.SendAsync(request);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    _logger.LogInformation("File successfully uploaded to API!");
-                }
-                else
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    _logger.LogError("API Upload failed with status {code}: {error}", response.StatusCode, error);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Exception occurred during file upload.");
-            }
-        }
+        private string CleanText(string text) => string.IsNullOrEmpty(text) ? text : Regex.Replace(text, @"[ \t]+", " ").Trim();
 
         private class DescriptionData { public string Text { get; set; } = ""; public string Html { get; set; } = ""; }
     }
