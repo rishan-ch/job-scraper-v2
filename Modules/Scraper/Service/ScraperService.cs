@@ -23,97 +23,200 @@ namespace JoraScraper.Modules.Scraper.Service
             try
             {
                 _logger.LogInformation("Starting browser setup...");
-                var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
-                
-                var launchOptions = new LaunchOptions
-                {
-                    Headless = true,
-                    ExecutablePath = executablePath,
-                    // Anti-Detection Flags
-                    Args = new[] { 
-                        "--no-sandbox", 
-                        "--disable-setuid-sandbox", 
-                        "--disable-dev-shm-usage",
-                        "--disable-blink-features=AutomationControlled" // Hides WebDriver flag
-                    }
-                };
 
-                // Local fallback if path not set
-                if (string.IsNullOrEmpty(executablePath))
+                var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
+                LaunchOptions launchOptions;
+
+                if (!string.IsNullOrEmpty(executablePath))
                 {
-                    _logger.LogInformation("Downloading Chromium for local run...");
-                    await new BrowserFetcher().DownloadAsync();
+                    _logger.LogInformation("Using system Chromium at: {path}", executablePath);
+                    launchOptions = new LaunchOptions
+                    {
+                        Headless = true,
+                        ExecutablePath = executablePath,
+                        // STEALTH FIX: Added AutomationControlled bypass
+                        Args = new[] { 
+                            "--no-sandbox", 
+                            "--disable-setuid-sandbox", 
+                            "--disable-dev-shm-usage",
+                            "--disable-blink-features=AutomationControlled" 
+                        }
+                    };
+                }
+                else
+                {
+                    _logger.LogInformation("PUPPETEER_EXECUTABLE_PATH not set. Downloading Chromium...");
+                    var browserFetcher = new BrowserFetcher();
+                    await browserFetcher.DownloadAsync();
+                    launchOptions = new LaunchOptions
+                    {
+                        Headless = true,
+                        Args = new[] { "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage" }
+                    };
                 }
 
                 await using var browser = await Puppeteer.LaunchAsync(launchOptions);
                 await using var page = await browser.NewPageAsync();
 
-                // 1. Set realistic Viewport and UserAgent
                 await page.SetViewportAsync(new ViewPortOptions { Width = 1920, Height = 1080 });
+                // Updated User Agent to a more modern version
                 await page.SetUserAgentAsync("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
-                // 2. Navigate with human-like behavior
-                string targetUrl = "https://au.jora.com/j?q=&l=";
+                int pageNum = 1;
+                int totalPages = 1;
+
+                string firstUrl = "https://au.jora.com/j?sp=homepage&trigger_source=homepage&q=&l=";
                 _logger.LogInformation("Navigating to Jora...");
-                
-                await page.GoToAsync(targetUrl, new NavigationOptions { 
-                    WaitUntil = new[] { WaitUntilNavigation.Networkidle2 }, 
-                    Timeout = 60000 
-                });
 
-                // Wait for dynamic content to settle
-                await Task.Delay(5000);
+                await page.GoToAsync(firstUrl, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded }, Timeout = 30000 });
 
-                // 3. Take Debug Screenshot (Always helpful for GitHub Actions)
+                // DEBUG: Take a screenshot immediately after navigation to see what GitHub sees
                 var exportDir = Path.Combine(Directory.GetCurrentDirectory(), "DataExports");
                 if (!Directory.Exists(exportDir)) Directory.CreateDirectory(exportDir);
                 await page.ScreenshotAsync(Path.Combine(exportDir, "debug_screen.png"));
 
-                // 4. Extract Jobs
                 try
                 {
-                    await page.WaitForSelectorAsync(".job-card", new WaitForSelectorOptions { Timeout = 15000 });
-                    
-                    var jobCards = await page.EvaluateFunctionAsync<List<JobInfo>>(@"() => {
-                        const results = [];
-                        const cards = document.querySelectorAll('.job-card');
-                        cards.forEach(card => {
-                            const link = card.querySelector('a.job-link');
-                            const company = card.querySelector('.job-company');
-                            const location = card.querySelector('.job-location');
-                            const abstract = card.querySelector('.job-abstract');
-                            
-                            results.push({
-                                title: link ? link.innerText.trim() : 'Unknown',
-                                url: link ? link.href : '',
-                                company: company ? company.innerText.trim() : 'N/A',
-                                location: location ? location.innerText.trim() : 'N/A',
-                                shortDescription: abstract ? abstract.innerText.trim() : '',
-                                postedDate: card.querySelector('.job-listed-date')?.innerText.trim() || ''
-                            });
-                        });
-                        return results;
-                    }");
-
-                    if (jobCards != null) jobs.AddRange(jobCards);
+                    await page.WaitForSelectorAsync(".job-card.result", new WaitForSelectorOptions { Timeout = 10000 });
+                    totalPages = await GetTotalPages(page);
+                    _logger.LogInformation("Detected total pages: {totalPages}", totalPages);
                 }
-                catch (Exception ex)
+                catch
                 {
-                    _logger.LogWarning("No job cards found or selector timeout: {msg}", ex.Message);
+                    _logger.LogWarning("No job cards found on first page. Check debug_screen.png");
                 }
 
-                _logger.LogInformation("Scraping complete. Collected {count} jobs.", jobs.Count);
+                while (pageNum <= totalPages)
+                {
+                    string url = pageNum == 1
+                        ? firstUrl
+                        : $"https://au.jora.com/j?sp=homepage&trigger_source=homepage&q=&l=&p={pageNum}";
+
+                    _logger.LogInformation("Processing page {pageNum}/{totalPages}: {url}", pageNum, totalPages, url);
+
+                    if (pageNum > 1)
+                    {
+                        await page.GoToAsync(url, new NavigationOptions
+                        {
+                            WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded },
+                            Timeout = 30000
+                        });
+                    }
+
+                    try
+                    {
+                        await page.WaitForSelectorAsync(".job-card.result", new WaitForSelectorOptions { Timeout = 10000 });
+                    }
+                    catch
+                    {
+                        _logger.LogWarning("No jobs found at page {pageNum}. Stopping.", pageNum);
+                        break;
+                    }
+
+                    await Task.Delay(2000);
+
+                    int jobCount = await page.EvaluateFunctionAsync<int>("() => document.querySelectorAll('.job-card.result').length");
+                    _logger.LogInformation("Found {jobCount} jobs on page {pageNum}", jobCount, pageNum);
+
+                    if (jobCount == 0) break;
+
+                    int newJobsOnPage = 0;
+
+                    for (int i = 0; i < jobCount; i++)
+                    {
+                        try
+                        {
+                            var jobInfo = await page.EvaluateFunctionAsync<JobInfo>($@"(index) => {{
+                                const cards = Array.from(document.querySelectorAll('.job-card.result'));
+                                const card = cards[index];
+                                if (!card) return null;
+                                
+                                const titleLink = card.querySelector('.job-title a.job-link');
+                                const company = card.querySelector('.job-company');
+                                const location = card.querySelector('.job-location');
+                                const badges = Array.from(card.querySelectorAll('.badge .content'));
+                                const salary = badges.find(b => b.textContent.includes('$') || b.textContent.includes('hour') || b.textContent.includes('year'));
+                                const posted = card.querySelector('.job-listed-date');
+                                const jobAbstract = card.querySelector('.job-abstract');
+                                
+                                return {{
+                                    title: titleLink ? titleLink.textContent.trim() : '',
+                                    company: company ? company.textContent.trim() : '',
+                                    location: location ? location.textContent.trim() : '',
+                                    salary: salary ? salary.textContent.trim() : 'Not specified',
+                                    postedDate: posted ? posted.textContent.trim() : '',
+                                    url: titleLink ? titleLink.href : '',
+                                    shortDescription: jobAbstract ? jobAbstract.textContent.trim() : '',
+                                    description: '',
+                                    descriptionHtml: ''
+                                }};
+                            }}", i);
+
+                            if (jobInfo == null || string.IsNullOrEmpty(jobInfo.Title)) continue;
+                            if (processedUrls.Contains(jobInfo.Url)) continue;
+
+                            processedUrls.Add(jobInfo.Url);
+
+                            // Extract description
+                            try
+                            {
+                                var clickSelector = $".job-card.result:nth-of-type({i + 1}) a.job-link.show-job-description";
+                                await page.ClickAsync(clickSelector);
+                                await page.WaitForSelectorAsync(".jdv-panel .job-description-container", new WaitForSelectorOptions { Timeout = 5000 });
+                                await Task.Delay(1000);
+
+                                var descData = await page.EvaluateFunctionAsync<DescriptionData>(@"() => {
+                                    const descContainer = document.querySelector('.jdv-panel .job-description-container');
+                                    return {
+                                        text: descContainer ? descContainer.innerText.trim() : '',
+                                        html: descContainer ? descContainer.innerHTML.trim() : ''
+                                    };
+                                }");
+
+                                jobInfo.Description = CleanText(descData.Text);
+                                jobInfo.DescriptionHtml = descData.Html;
+                            }
+                            catch { jobInfo.Description = jobInfo.ShortDescription; }
+
+                            jobs.Add(jobInfo);
+                            newJobsOnPage++;
+                        }
+                        catch (Exception ex) { _logger.LogError(ex, "Error on job {index}", i); }
+                    }
+
+                    if (newJobsOnPage == 0) break;
+                    pageNum++;
+                }
+
+                _logger.LogInformation("Scraping complete. Total jobs collected: {count}", jobs.Count);
                 await SaveJobsToExcel(jobs);
             }
-            catch (Exception ex)
+            catch (Exception ex) { _logger.LogError(ex, "Error during scraping process."); }
+        }
+
+        private async Task<int> GetTotalPages(IPage page)
+        {
+            try
             {
-                _logger.LogError(ex, "Critical failure in ScraperService.");
+                return await page.EvaluateFunctionAsync<int>(@"() => {
+                    const indicator = document.querySelector('.search-results-page-number');
+                    if (!indicator) return 1;
+                    const match = indicator.textContent.match(/of\s+(\d+)/i);
+                    return match ? parseInt(match[1]) : 1;
+                }");
             }
+            catch { return 1; }
+        }
+
+        private string CleanText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            return Regex.Replace(text, @"[ \t]+", " ").Trim();
         }
 
         public async Task SaveJobsToExcel(List<JobInfo> jobs, string fileName = "JobsFromJora.xlsx")
         {
-            // EPPlus 8+ License Requirement
+            // EPPLUS 8 FIX: Use static License property
             ExcelPackage.License.SetNonCommercialPersonal("Your Name");
 
             var exportDir = Path.Combine(Directory.GetCurrentDirectory(), "DataExports");
@@ -123,29 +226,31 @@ namespace JoraScraper.Modules.Scraper.Service
             if (File.Exists(filePath)) File.Delete(filePath);
 
             using var package = new ExcelPackage();
-            var ws = package.Workbook.Worksheets.Add("Jobs");
+            var worksheet = package.Workbook.Worksheets.Add("Jobs");
 
             // Headers
-            string[] headers = { "Title", "Company", "Location", "Posted Date", "URL", "Summary" };
-            for (int i = 0; i < headers.Length; i++) {
-                ws.Cells[1, i + 1].Value = headers[i];
-                ws.Cells[1, i + 1].Style.Font.Bold = true;
-            }
+            string[] headers = { "JobPostId", "Title", "Company", "Location", "Salary", "Posted Date", "URL", "Description" };
+            for (int i = 0; i < headers.Length; i++) worksheet.Cells[1, i + 1].Value = headers[i];
 
-            // Data
             for (int i = 0; i < jobs.Count; i++)
             {
-                ws.Cells[i + 2, 1].Value = jobs[i].Title;
-                ws.Cells[i + 2, 2].Value = jobs[i].Company;
-                ws.Cells[i + 2, 3].Value = jobs[i].Location;
-                ws.Cells[i + 2, 4].Value = jobs[i].PostedDate;
-                ws.Cells[i + 2, 5].Value = jobs[i].Url;
-                ws.Cells[i + 2, 6].Value = jobs[i].ShortDescription;
+                var job = jobs[i];
+                worksheet.Cells[i + 2, 1].Value = job.JobPostId;
+                worksheet.Cells[i + 2, 2].Value = job.Title;
+                worksheet.Cells[i + 2, 3].Value = job.Company;
+                worksheet.Cells[i + 2, 4].Value = job.Location;
+                worksheet.Cells[i + 2, 5].Value = job.Salary;
+                worksheet.Cells[i + 2, 6].Value = job.PostedDate;
+                worksheet.Cells[i + 2, 7].Value = job.Url;
+                worksheet.Cells[i + 2, 8].Value = job.DescriptionHtml;
             }
 
-            ws.Cells.AutoFitColumns();
+            worksheet.Cells.AutoFitColumns();
             await package.SaveAsAsync(new FileInfo(filePath));
-            _logger.LogInformation("✅ Excel saved to: {path}", filePath);
+
+            _logger.LogInformation("✅ Excel saved to: {filePath}", filePath);
         }
+
+        private class DescriptionData { public string Text { get; set; } = ""; public string Html { get; set; } = ""; }
     }
 }
