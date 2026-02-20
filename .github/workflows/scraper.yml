@@ -2,8 +2,8 @@ name: Jora Scraper Execution
 
 on:
   schedule:
-    - cron: '0 9 * * *' # Automatically runs every day at 9:00 AM UTC
-  workflow_dispatch:    # Allows you to click a manual "Run" button in GitHub Actions UI
+    - cron: '0 0 */2 * *' # Runs at midnight UTC every 2 days
+  workflow_dispatch:      # Keep the manual "Run" button
 
 jobs:
   build-and-run:
@@ -16,7 +16,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x' # Matches your project version
+          dotnet-version: '8.0.x' 
 
       - name: Install Google Chrome
         run: |
@@ -27,17 +27,17 @@ jobs:
         run: dotnet restore
 
       - name: Run Scraper CLI
-        # IMPORTANT: Replace 'YourProject.csproj' with your actual filename
-        # The '--' tells dotnet run to pass the following flags to YOUR code
         run: dotnet run --project JoraScraper.csproj -- --run-scraper
         env:
           PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
-          # If you have a database or API keys, add them here:
-          # MY_CONN_STRING: ${{ secrets.MY_CONN_STRING }}
+          # Passing the license via Env variable is a good backup safety net
+          EPPlusLicense: NonCommercialPersonal 
 
-      - name: Upload Scraped Excel
+      - name: Upload Scraper Results
+        if: always() # Runs even if the scraper fails or returns 0
         uses: actions/upload-artifact@v4
         with:
-          name: JoraJobs-Export
-          path: DataExports/JobsFromJora.xlsx
-          retention-days: 30 # Files stay available for download for 30 days
+          name: Jora-Scraper-Results
+          # CHANGE: Upload the whole folder to catch the .xlsx AND the .png
+          path: DataExports/
+          retention-days: 7
