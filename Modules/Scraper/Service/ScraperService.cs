@@ -250,6 +250,8 @@ namespace JoraScraper.Modules.Scraper.Service
             }
 
             worksheet.Cells.AutoFitColumns();
+            _logger.LogInformation("sending the file to himalayan");
+            await UploadFileToApiAsync(filePath);
             await package.SaveAsAsync(new FileInfo(filePath));
 
             _logger.LogInformation("✅ Excel saved to: {filePath}", filePath);
