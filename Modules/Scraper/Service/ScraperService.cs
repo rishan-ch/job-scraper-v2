@@ -228,6 +228,7 @@ namespace JoraScraper.Modules.Scraper.Service
 
         public async Task SaveJobsToExcel(List<JobInfo> jobs, string fileName = "JobsFromJora.xlsx")
         {
+            _logger.LogInformation("Saving the excel file to excel sheet");
             var exportDir = Path.Combine(Directory.GetCurrentDirectory(), "DataExports");
             if (!Directory.Exists(exportDir))
                 Directory.CreateDirectory(exportDir);
@@ -269,12 +270,14 @@ namespace JoraScraper.Modules.Scraper.Service
                 worksheet.Cells.AutoFitColumns();
 
                 await package.SaveAsAsync(new FileInfo(filePath));
+                _logger.LogInformation("Excel file saved, now preparing to send the file to himalayan");
                 await SendFileToApiAsync(filePath);
             }
         }
 
         public async Task<bool> SendFileToApiAsync(string filePath)
         {
+            _logger.LogInformation("Send method invoked successfully");
             string targetUrl = "https://api.dsailorgroup.com.au/api/job-files/upload";
             if (!File.Exists(filePath))
             {

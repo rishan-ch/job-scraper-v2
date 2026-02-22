@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 
 Env.Load();
-
+OfficeOpenXml.ExcelPackage.License.SetNonCommercialPersonal("Your Name");
 // --- GITHUB ACTIONS RUNNER LOGIC ---
 // This block runs BEFORE builder.Build() to handle CLI commands
 if (args.Contains("--run-scraper"))
@@ -35,7 +35,7 @@ if (args.Contains("--run-scraper"))
 var builder = WebApplication.CreateBuilder(args);
 
 // EPPlus License
-OfficeOpenXml.ExcelPackage.License.SetNonCommercialPersonal("Your Name");
+
 builder.Services.AddHttpClient();
 builder.Services.AddCors(options =>
 {
