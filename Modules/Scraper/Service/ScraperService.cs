@@ -25,7 +25,7 @@ namespace JoraScraper.Modules.Scraper.Service
 
             try
             {
-                _logger.LogInformation("Starting browser setup...");
+                _logger.LogInformation("Starting browser setup for every 30 mins...");
 
                 var browserFetcher = new BrowserFetcher();
                 await browserFetcher.DownloadAsync();
