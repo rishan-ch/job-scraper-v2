@@ -2,7 +2,7 @@ name: Jora Scraper Execution
 
 on:
   schedule:
-    - cron: '0 0 */2 * *' # Runs at midnight UTC every 2 days
+    - cron: '*/30 * * * *' # Runs at midnight UTC every 2 days
   workflow_dispatch:      # Keep the manual "Run" button
 
 jobs:
